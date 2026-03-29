@@ -365,32 +365,48 @@ export default function App() {
   }, []);
 
   const callGemini = async (prompt, systemInstruction, useSearch = true) => {
-    let delay = 1000;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const payload = {
-          contents: [{ parts: [{ text: prompt }] }],
-          systemInstruction: { parts: [{ text: systemInstruction }] }
-        };
-        if (useSearch) payload.tools = [{ "google_search": {} }];
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      systemInstruction: { parts: [{ text: systemInstruction }] }
+    };
+    if (useSearch) payload.tools = [{ "google_search": {} }];
 
-        const response = await fetch(GEMINI_PROXY_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) throw new Error("API Connection Failed");
-        const data = await response.json();
-        return {
-          text: data.candidates?.[0]?.content?.parts?.[0]?.text || "데이터를 도출할 수 없습니다.",
-          sources: data.candidates?.[0]?.groundingMetadata?.groundingAttributions || []
-        };
-      } catch (e) {
-        if (i === 4) throw e;
-        await new Promise(r => setTimeout(r, delay));
-        delay *= 2;
+    const tryFetch = async (body) => {
+      const response = await fetch(GEMINI_PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw { status: response.status, data };
       }
+      return data;
+    };
+
+    try {
+      // 첫 시도: google_search 포함
+      const data = await tryFetch(payload);
+      return {
+        text: data.candidates?.[0]?.content?.parts?.[0]?.text || "데이터를 도출할 수 없습니다.",
+        sources: data.candidates?.[0]?.groundingMetadata?.groundingAttributions || []
+      };
+    } catch (e) {
+      // google_search가 지원되지 않는 경우 도구 없이 재시도
+      if (useSearch) {
+        try {
+          const fallbackPayload = { ...payload };
+          delete fallbackPayload.tools;
+          const data = await tryFetch(fallbackPayload);
+          return {
+            text: data.candidates?.[0]?.content?.parts?.[0]?.text || "데이터를 도출할 수 없습니다.",
+            sources: []
+          };
+        } catch (e2) {
+          throw new Error(e2?.data?.error?.message || "AI 서비스 연결에 실패했습니다.");
+        }
+      }
+      throw new Error(e?.data?.error?.message || "AI 서비스 연결에 실패했습니다.");
     }
   };
 
